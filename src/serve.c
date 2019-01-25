@@ -86,6 +86,7 @@
 #include "stringmap.h"
 #include "dotd.h"
 #include "fix_debug_info.h"
+#include "lock.h"
 #ifdef HAVE_GSSAPI
 #include "auth.h"
 
@@ -630,6 +631,80 @@ static int make_temp_dir_and_chdir_for_cpp(int in_fd,
         return ret;
 }
 
+/**
+ * Accepts precompiled header path, checks if it exist on disk and loads if need.
+ *
+ * PCHP: precompiled header path on disk; it should be present on distccd agent
+ * PCHR:
+ *      0 - if precompiled header is present on distccd agent or we do not need it at all
+ *      1 - if precompiled header is absent on distccd agent and we should sent it
+ * PCHF: precompiled header file itself
+ **/
+static int try_load_precompiled_header (int in_fd, int out_fd) {
+    int ret = 0;
+    int lock_fd = 0;
+    char *precompiled_header_path = NULL;
+    char *precompiled_header_lock = NULL;
+
+    do {
+        if ((ret = dcc_r_token_string(in_fd, "PCHP", &precompiled_header_path)))
+            break;
+
+        if (!precompiled_header_path[0] || access(precompiled_header_path, F_OK) != -1) {
+            ret = dcc_x_token_int(out_fd, "PCHR", 0);
+            break;
+        }
+        rs_log_notice("precompiled header %s is missed, try to load", precompiled_header_path);
+        if ((ret = dcc_mkdir_recursively(precompiled_header_path)))
+            break;
+
+        precompiled_header_lock = (char *)malloc(strlen(precompiled_header_path) + 1 + 5);
+        if (!precompiled_header_lock) {
+            ret = EXIT_OUT_OF_MEMORY;
+            break;
+        }
+
+        strcpy(precompiled_header_lock, precompiled_header_path);
+        strcat(precompiled_header_lock, ".lock");
+
+        if ((ret = dcc_open_lockfile(precompiled_header_lock, &lock_fd)))
+            break;
+
+        if ((ret = dcc_lock(lock_fd, 1)))
+            break;
+
+        if (access(precompiled_header_path, F_OK) != -1) {
+            rs_log_notice("precompiled header %s was loaded from sibling process", precompiled_header_path);
+            ret = dcc_x_token_int(out_fd, "PCHR", 0);
+            break;
+        }
+        if ((ret = dcc_x_token_int(out_fd, "PCHR", 1)))
+            break;
+
+        char *precompiled_header_tmp = precompiled_header_lock;
+        strcpy(precompiled_header_tmp, precompiled_header_path);
+        strcat(precompiled_header_tmp, ".tmp");
+
+        rs_log_notice("loading precompiled header into %s", precompiled_header_tmp);
+        if ((ret = dcc_r_token_file(in_fd, "PCHF", precompiled_header_tmp, DCC_COMPRESS_LZO1X)))
+            break;
+
+        ret = dcc_rename(precompiled_header_tmp, precompiled_header_path);
+        if (!ret)
+            rs_log_notice("precompiled header %s was successfully loaded", precompiled_header_path);
+    } while(0);
+
+    free(precompiled_header_path);
+    free(precompiled_header_lock);
+    if (lock_fd) {
+        if (!ret)
+            return dcc_unlock(lock_fd);
+
+        dcc_unlock(lock_fd);
+    }
+
+    return ret;
+}
 
 /**
  * Read a request, run the compiler, and send a response.
@@ -701,6 +776,10 @@ static int dcc_run_job(int in_fd,
         || (ret = dcc_scan_args(argv, &orig_input_tmp, &orig_output_tmp,
                                 &tweaked_argv)))
         goto out_cleanup;
+
+    if ((ret = try_load_precompiled_header(in_fd, out_fd))) {
+        goto out_cleanup;
+    }
 
     /* The orig_input_tmp and orig_output_tmp values returned by dcc_scan_args()
      * are aliased with some element of tweaked_argv.  We need to copy them,

@@ -653,6 +653,7 @@ dcc_build_somewhere(char *argv[],
                     int *status)
 {
     char *input_fname = NULL, *output_fname, *cpp_fname, *deps_fname = NULL;
+    char *header_list_fname = NULL;
     char **files;
     char **server_side_argv = NULL;
     int server_side_argv_deep_copied = 0;
@@ -660,6 +661,7 @@ dcc_build_somewhere(char *argv[],
     int needs_dotd = 0;
     int sets_dotd_target = 0;
     pid_t cpp_pid = 0;
+    pid_t header_list_pid = 0;
     int cpu_lock_fd = -1, local_cpu_lock_fd = -1;
     int ret;
     int remote_ret = 0;
@@ -781,6 +783,9 @@ dcc_build_somewhere(char *argv[],
         if ((ret = dcc_cpp_maybe(argv, input_fname, &cpp_fname, &cpp_pid) != 0))
             goto fallback;
 
+        if ((ret = dcc_depends_header_list(argv, input_fname, &header_list_fname, &header_list_pid)))
+            goto fallback;
+
         if ((ret = dcc_strip_local_args(argv, &server_side_argv)))
             goto fallback;
 
@@ -804,11 +809,12 @@ dcc_build_somewhere(char *argv[],
     if ((ret = dcc_compile_remote(server_side_argv,
                                   input_fname,
                                   cpp_fname,
+                                  header_list_fname,
                                   files,
                                   output_fname,
                                   needs_dotd ? deps_fname : NULL,
                                   server_stderr_fname,
-                                  cpp_pid, local_cpu_lock_fd,
+                                  cpp_pid, header_list_pid, local_cpu_lock_fd,
                   host, status)) != 0) {
         /* Returns zero if we successfully ran the compiler, even if
          * the compiler itself bombed out. */

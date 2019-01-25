@@ -124,6 +124,41 @@ int dcc_mk_tmpdir(const char *path)
 }
 
 /**
+ * Create the full @path. If it already exists as a directory we succeed.
+ */
+int dcc_mkdir_recursively(const char *path)
+{
+    char *copy = 0;
+    char *p;
+    int ret;
+
+    copy = strdup(path);
+    if (copy == NULL) {
+        return EXIT_OUT_OF_MEMORY;
+    }
+
+    dcc_truncate_to_dirname(copy);
+    if (copy[0] == '\0') {
+        free(copy);
+        return 0;
+    }
+
+    for (p = copy; *p != '\0'; ++p) {
+        if (*p == '/' && p != copy) {
+            *p = '\0';
+            if ((ret = dcc_mkdir(copy))) {
+                free(copy);
+                return ret;
+            }
+            *p = '/';
+        }
+    }
+    ret = dcc_mkdir(copy);
+    free(copy);
+    return ret;
+}
+
+/**
  * Create the directory @p path.  If it already exists as a directory
  * we succeed.
  **/

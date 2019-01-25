@@ -250,6 +250,7 @@ int dcc_get_tempdir(const char **);
 int dcc_make_tmpnam(const char *, const char *suffix, char **);
 int dcc_get_new_tmpdir(char **tmpdir);
 int dcc_mk_tmpdir(const char *path);
+int dcc_mkdir_recursively(const char *path);
 int dcc_mkdir(const char *path);
 
 int dcc_get_lock_dir(char **path_ret) WARN_UNUSED;
@@ -269,8 +270,8 @@ int dcc_strip_local_args(char **from, char ***out_argv);
 int dcc_strip_dasho(char **from, char ***out_argv);
 
 /* cpp.c */
-int dcc_cpp_maybe(char **argv, char *input_fname, char **cpp_fname,
-		  pid_t *cpp_pid);
+int dcc_cpp_maybe(char **argv, char *input_fname, char **cpp_fname, pid_t *cpp_pid);
+int dcc_depends_header_list(char **argv, char *input_fname, char **header_list_fname, pid_t *header_list_pid);
 
 /* filename.c */
 int dcc_is_source(const char *sfile);
