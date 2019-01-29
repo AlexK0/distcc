@@ -26,11 +26,13 @@
 int dcc_compile_remote(char **argv,
                        char *input_fname,
                        char *cpp_fname,
+                       char *header_list_fname,
                        char **file_names,
                        char *output_fname,
                        char *deps_fname,
                        char *server_stderr_fname,
                        pid_t cpp_pid,
+                       pid_t header_list_pid,
                        int local_cpu_lock_fd,
                        struct dcc_hostdef *host,
                        int *status);

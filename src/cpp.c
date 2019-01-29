@@ -51,8 +51,7 @@
  * allows us to overlap opening the TCP socket, which probably doesn't
  * use many cycles, with running the preprocessor.
  **/
-int dcc_cpp_maybe(char **argv, char *input_fname, char **cpp_fname,
-          pid_t *cpp_pid)
+int dcc_cpp_maybe(char **argv, char *input_fname, char **cpp_fname, pid_t *cpp_pid)
 {
     char **cpp_argv;
     int ret;
@@ -98,4 +97,28 @@ int dcc_cpp_maybe(char **argv, char *input_fname, char **cpp_fname,
 
     return dcc_spawn_child(cpp_argv, cpp_pid,
                            "/dev/null", *cpp_fname, NULL);
+}
+
+int dcc_depends_header_list(char **argv, char *input_fname, char **header_list_fname, pid_t *header_list_pid)
+{
+    char **header_list_argv;
+    int ret;
+
+    *header_list_pid = 0;
+
+    if (dcc_is_preprocessed(input_fname)) {
+        rs_log_error("failed to get depends header list, file already preprocessed");
+        return EXIT_DISTCC_FAILED;
+    }
+
+    if ((ret = dcc_make_tmpnam("distcc", ".list", header_list_fname)))
+        return ret;
+
+    if ((ret = dcc_strip_dasho(argv, &header_list_argv))
+        || (ret = dcc_set_action_opt(header_list_argv, "-MM")))
+        return ret;
+
+    /* FIXME: header_list_argv is leaked */
+    return dcc_spawn_child(header_list_argv, header_list_pid,
+            "/dev/null", *header_list_fname, NULL);
 }

@@ -24,6 +24,8 @@ int dcc_lock_host(const char *lockname,
                   const struct dcc_hostdef *host, int slot, int block,
                   int *lock_fd);
 
+int dcc_lock(int fd, int block);
+
 int dcc_unlock(int lock_fd);
 
 int dcc_make_lock_filename(const char *lockname,

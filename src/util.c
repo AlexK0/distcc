@@ -566,13 +566,21 @@ int dcc_dup_part(const char **psrc, char **pdst, const char *sep)
     return 0;
 }
 
-
-
 int dcc_remove_if_exists(const char *fname)
 {
     if (unlink(fname) && errno != ENOENT) {
         rs_log_warning("failed to unlink %s: %s", fname,
                        strerror(errno));
+        return EXIT_IO_ERROR;
+    }
+    return 0;
+}
+
+int dcc_rename(const char *old_filename, const char *new_filename)
+{
+    if (rename(old_filename, new_filename)) {
+        rs_log_warning("failed to rename %s to %s: %s",
+                old_filename, new_filename, strerror(errno));
         return EXIT_IO_ERROR;
     }
     return 0;

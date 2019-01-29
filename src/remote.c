@@ -34,6 +34,7 @@
 #include <string.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <limits.h>
 
 #include <sys/types.h>
 #include <sys/time.h>
@@ -149,7 +150,98 @@ dcc_send_header(int net_fd,
     return 0;
 }
 
+static int
+dcc_get_precompiled_header_path(const char *header_list_fname, char precompiled_header_path[PATH_MAX]) {
+    int ret;
+    int fd;
+    off_t file_size;
 
+    precompiled_header_path[0] = 0;
+    if (header_list_fname == NULL) {
+        return 0;
+    }
+
+    if ((ret = dcc_open_read(header_list_fname, &fd, &file_size))) {
+        return ret;
+    }
+
+    char *data = (char *)malloc(file_size + 1);
+    if (data == NULL) {
+        dcc_close(fd);
+        return EXIT_OUT_OF_MEMORY;
+    }
+
+    if ((ret = dcc_readx(fd, data, file_size))) {
+        free(data);
+        dcc_close(fd);
+        return ret;
+    }
+    data[file_size] = 0;
+
+    const char precompiled_preprocess[] = "#pragma GCC pch_preprocess \"";
+    const char *begin = strstr(data, precompiled_preprocess);
+    if (begin) {
+        begin += strlen(precompiled_preprocess);
+        const char *end = strchr(begin, '"');
+        if (!end || end - begin >= PATH_MAX) {
+            free(data);
+            dcc_close(fd);
+            return EXIT_DISTCC_FAILED;
+        }
+        strncpy(precompiled_header_path, begin, end - begin);
+        precompiled_header_path[end - begin] = 0;
+    }
+
+    free(data);
+    dcc_close(fd);
+    return 0;
+}
+
+/**
+ * Sends precompiled header path and sends precompiled header itself if need.
+ *
+ * PCHP: precompiled header path on disk; it should be present on distccd agent
+ * PCHR:
+ *      0 - if precompiled header is present on distccd agent or we do not need it at all
+ *      1 - if precompiled header is absent on distccd agent and we should send it
+ * PCHF: precompiled header file itself
+ **/
+static int
+try_exchange_precompiled_header(int to_net_fd, int from_net_fd, char *input_fname, int *status,
+                                const char *header_list_fname, pid_t header_list_pid) {
+    int ret;
+    if ((ret = dcc_wait_for_cpp(header_list_pid, status, input_fname))) {
+        return ret;
+    }
+
+    char precompiled_header_path[PATH_MAX] = {0};
+    if ((ret = dcc_get_precompiled_header_path(header_list_fname, precompiled_header_path))) {
+        return ret;
+    }
+
+    /* expect that precompiled header is placed on tmp dir */
+    /* TODO: may be such limitation too strict? */
+    if (precompiled_header_path[0] && strncmp(precompiled_header_path, "/tmp/", 5)) {
+        rs_log_warning("expect precompiled header in /tmp dir, got %s", precompiled_header_path);
+        precompiled_header_path[0] = 0;
+    }
+
+    if ((ret = dcc_x_token_string(to_net_fd, "PCHP", precompiled_header_path))) {
+        return ret;
+    }
+
+    unsigned precompiled_header_required;
+    if ((ret = dcc_r_token_int(from_net_fd, "PCHR", &precompiled_header_required))) {
+        return ret;
+    }
+
+    if (precompiled_header_required) {
+        if ((ret = dcc_x_file(to_net_fd, precompiled_header_path, "PCHF", DCC_COMPRESS_LZO1X, NULL))) {
+            return ret;
+        }
+    }
+    return 0;
+}
 /**
  * Pass a compilation across the network.
  *
@@ -164,16 +256,22 @@ dcc_send_header(int net_fd,
  *
  * @param argv Compiler command to run.
  *
- * @param cpp_fname Filename of preprocessed source.  May not be complete yet,
+ * @param cpp_fname Filename of preprocessed source. May not be complete yet,
  * depending on @p cpp_pid.
+ *
+ * @param header_list_fname Filename of list with used headers.
+ * May not be complete yet, depending on @p header_list_pid.
  *
  * @param files If we are doing preprocessing on the server, the names of
  * all the files needed; otherwise, NULL.
  *
  * @param output_fname File that the object code should be delivered to.
  *
- * @param cpp_pid If nonzero, the pid of the preprocessor.  Must be
+ * @param cpp_pid If nonzero, the pid of the preprocessor. Must be
  * allowed to complete before we send the input file.
+ *
+ * @param header_list_pid If nonzero, the pid of the preprocessor for getting used headers.
+ * Must be allowed to complete before we send the input file.
  *
  * @param local_cpu_lock_fd If != -1, file descriptor for the lock file.
  * Should be != -1 iff (host->cpp_where != DCC_CPP_ON_SERVER).
@@ -195,11 +293,13 @@ dcc_send_header(int net_fd,
 int dcc_compile_remote(char **argv,
                        char *input_fname,
                        char *cpp_fname,
+                       char *header_list_fname,
                        char **files,
                        char *output_fname,
                        char *deps_fname,
                        char *server_stderr_fname,
                        pid_t cpp_pid,
+                       pid_t header_list_pid,
                        int local_cpu_lock_fd,
                        struct dcc_hostdef *host,
                        int *status)
@@ -251,6 +351,12 @@ int dcc_compile_remote(char **argv,
           goto out;
         }
 
+        /* Here will sent just an empty string */
+        if ((ret = try_exchange_precompiled_header(to_net_fd, from_net_fd, input_fname, status,
+                                                   header_list_fname, header_list_pid))) {
+            goto out;
+        }
+
         n_files = dcc_argv_len(files);
         if ((ret = dcc_x_many_files(to_net_fd, n_files, files))) {
             goto out;
@@ -262,6 +368,11 @@ int dcc_compile_remote(char **argv,
 
         if ((ret = dcc_send_header(to_net_fd, argv, host)))
             goto out;
+
+        if ((ret = try_exchange_precompiled_header(to_net_fd, from_net_fd, input_fname, status,
+                                                   header_list_fname, header_list_pid))) {
+            goto out;
+        }
 
         if ((ret = dcc_wait_for_cpp(cpp_pid, status, input_fname)))
             goto out;

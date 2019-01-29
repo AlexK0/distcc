@@ -176,7 +176,7 @@ int dcc_make_lock_filename(const char *lockname,
  * @retval 0 if we got the lock
  * @retval -1 with errno set if the file is already locked.
  **/
-static int sys_lock(int fd, int block)
+int dcc_lock(int fd, int block)
 {
 #if defined(F_SETLK)
     struct flock lockparam;
@@ -291,7 +291,7 @@ int dcc_lock_host(const char *lockname,
         return ret;
     }
 
-    if (sys_lock(*lock_fd, block) == 0) {
+    if (dcc_lock(*lock_fd, block) == 0) {
         rs_trace("got %s lock on %s slot %d as fd%d", lockname,
                  host->hostdef_string, slot, *lock_fd);
         free(fname);
